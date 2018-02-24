@@ -23,7 +23,10 @@ float iso_threshold;
 float density;
 
 boolean save;
-float seedZ;
+float seedX, seedY, seedZ;
+
+// initial position
+Vec3D pos0, pos;
 
 void setup() 
 {
@@ -40,7 +43,7 @@ void setup()
   nx = 200;
   ny = 200;
   nz = 50;
-  scale = new Vec3D(1, 1, 0.1).scaleSelf(50);
+  scale = new Vec3D(0.5, 0.5, 0.5).scaleSelf(50);
   
   // intializing the global volumetric space using the parameters above
   volume = new VolumetricSpaceArray(scale, nx, ny, nz);
@@ -59,7 +62,13 @@ void setup()
   density = 0.5;
   
   save = false;
-  seedZ = random(20);
+  seedX = random(100);
+  seedY = random(100);
+  seedZ = random(100);
+  
+  // initial position
+  pos0 = new Vec3D(nx/2, ny/2, nz/2);
+  
 }
 
 void draw() 
@@ -67,13 +76,19 @@ void draw()
   background(0);
   setLights();
   
-  brush.setSize(1);
-  brush.drawAtGridPos(map(mouseX, 0, width, 0, nx), map(mouseY, 0, height, 0, ny), map(noise(seedZ), 0, 1, 0, nz), density);
+  //brush.setSize(1);
+  brush.setSize(noise(seedX, seedY, seedZ) + 0.2);
+  //brush.drawAtGridPos(map(mouseX, 0, width, 0, nx), map(mouseY, 0, height, 0, ny), map(noise(seedZ), 0, 1, 0, nz), density);
+  pos = new Vec3D(pos0.x + map(noise(seedX), 0, 1, 0, 1), pos0.y + map(noise(seedY), 0, 1, 0, 0.5), pos0.z + map(noise(seedZ), 0, 1, 0, 0.5));
+  //brush.drawAtGridPos(pos.x, pos.y, pos.z, density);
+  brush.drawAtGridPos(map(noise(seedX), 0, 1, 0, nx), map(noise(seedY), 0, 1, 0, ny), map(noise(seedZ), 0, 1, 0, nz), density);
+  pos0 = pos;
   
   volume.closeSides();
   
   surface.reset();
   surface.computeSurfaceMesh(mesh, iso_threshold);
+  //mesh.toWEMesh().subdivide();
   
   setPerspective();
   gfx.mesh(mesh);
@@ -85,7 +100,9 @@ void draw()
     save = false; 
   }
   
-  seedZ += 0.1;
+  seedX += 0.01;
+  seedY += 0.01;
+  seedZ += 0.03;
 }
 
 void keyPressed()
