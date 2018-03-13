@@ -11,6 +11,7 @@ Minim minim;
 AudioPlayer player;
 AudioBuffer currentBuffer;
 AudioSample audio;
+int playCount;
 
 import peasy.*;
 import peasy.org.apache.commons.math.*;
@@ -36,6 +37,10 @@ float seedX, seedY, seedZ;
 
 // initial position
 Vec3D pos0, pos;
+
+// arrays for storing audio analysis data
+float[][] ftdata;
+float[] audioLevels;
 
 // arrays for storing successive brush position
 float[] x,y,z;
@@ -87,48 +92,34 @@ void setup()
   minim = new Minim(this);
   player = minim.loadFile("Back_Garden.wav", 1024); // 1024: buffer size
   player.play();
-  player.loop();
+  playCount = 3; // the number of times the audio file loops
+  player.loop(playCount);
   
   // creating an FFT object for working with frequency domain representation of the audio file
   // the size of the spectrum is the same as the size of the audio buffer
-  fftLog = new FFT(player.bufferSize(), player.sampleRate() );
+  fftLog = new FFT(player.bufferSize(), player.sampleRate());
   
   // calculating averages based on minimum octave width of 22 Hz
   // split each octave into 3 bands
   fftLog.logAverages(5, 3); // check how this works later !!!
   
-  //offlineAnalysis("Back_Garden.wav");
+  offlineAnalysis("Back_Garden.wav");
 
 }
 
 void draw() 
-{
-  if(frameCount > 1000)
-  {
-    noLoop();
-    player.pause();
-  }
-  
-  
+{ 
   background(0);
   setLights();
-  println(player.position());
+  //println(player.position());
   
   // performing a fft on the audio file loaded in player
   currentBuffer = player.mix;
   fftLog.forward(currentBuffer);
   
-  // sending the buffer for analysis
-  
   // iterating over the spectrum elements
   for(int i = 0; i < fftLog.avgSize(); i++)
-  {
-    // getting general information for frequeny band at index i
-    //float centerFrequency = fftLog.getAverageCenterFrequency(i);
-    //float averageWidth = fftLog.getAverageBandWidth(i);
-    
-    // getting the min and the max
-    
+  { 
     // mapping the position of the frequency band to the x position of the brush
     pos.x = map(i, 0, fftLog.avgSize(), 0, nx);
     
@@ -157,14 +148,12 @@ void draw()
     //brush.drawAtGridPos(pos.x, pos.y, pos.z, density);
     //brush.drawAtGridPos(map(noise(seedX), 0, 1, 0, nx), map(noise(seedY), 0, 1, 0, ny), map(noise(seedZ), 0, 1, 0, nz), density);
     //pos0 = pos;
-    
-    volume.closeSides();
   }
   
+  volume.closeSides();
   surface.reset();
   surface.computeSurfaceMesh(mesh, iso_threshold);
   //mesh.toWEMesh().subdivide();
-  
   setPerspective();
   gfx.mesh(mesh);
   
@@ -172,7 +161,7 @@ void draw()
   {
     mesh.toWEMesh().subdivide();
     mesh.toWEMesh().subdivide();
-    mesh.saveAsSTL(sketchPath("mesh" + (System.currentTimeMillis()/1000)+ ".stl"));
+    mesh.saveAsSTL(sketchPath("renders/mesh" + (System.currentTimeMillis()/1000)+ ".stl"));
     //mesh.saveAsOBJ(sketchPath("mesh" + (System.currentTimeMillis()/1000)+ ".obj"));
     save = false; 
   }
@@ -203,21 +192,72 @@ void setLights()
   shininess(1);
 }
 
-void bufferAnalysis(String audioFilename)
+void offlineAnalysis(String audioFilename)
 {
   // loading the audio sample from file
   audio = minim.loadSample(audioFilename, 1024);
-  fftLog = new FFT(audio.bufferSize(), audio.sampleRate() );
-  fftLog.logAverages(22, 3); 
   
-  // calculating x positions for the brush
-  x = new float[fftLog.avgSize()];
-  for(int i=0; i<fftLog.avgSize(); i++)
+  // getting the left and right channels and computing the mix of the audio as float array
+  float[] leftChannel = audio.getChannel(AudioSample.LEFT);
+  float[] rightChannel = audio.getChannel(AudioSample.RIGHT);
+  float[] mixChannel = new float[leftChannel.length]; // can also use right channel since the lengths are same
+  for(int i=0; i<mixChannel.length; i++)
   {
-    x[i] = map(i, 0, fftLog.avgSize(), 0, nx);
+    mixChannel[i] = (leftChannel[i] + rightChannel[i])/2.0;
   }
   
-  // calculating y positions for the brush
+  // array for loading sample data as per fft size
+  float[] fftSamples = new float[player.bufferSize()];
   
+  // total number of discrete audio units that need to be analyzed
+  int totalUnits = (mixChannel.length/fftSamples.length) + 1;
   
+  // 2d array storing the Fourier transform data for all audio units
+  ftdata = new float[totalUnits][fftLog.avgSize()];
+  
+  // array to store the levels for each audio unit
+  audioLevels = new float[totalUnits];
+  
+  // analyzing the individual audio units
+  int unitStartPos, unitSize;
+  float level;
+  for(int unit = 0; unit < totalUnits; unit++)
+  {
+    unitStartPos = unit * fftSamples.length;
+    unitSize =  min(mixChannel.length - unitStartPos, fftSamples.length); // to account for the last unit which can be shorter than audio window
+  
+    // copying the unit into the analysis array
+    System.arraycopy(mixChannel, // source of the copy
+                     unitStartPos, // index to start in the source
+                     fftSamples, // destination of the copy
+                     0, // index to copy to
+                     unitSize // how many samples to copy
+                     );
+     
+    // if the audio unit was smaller than the size of the audio buffer, pad it with zeroes
+    if(unitSize < fftSamples.length) 
+    {
+      java.util.Arrays.fill(fftSamples, unitSize, fftSamples.length - 1, 0.0);
+    }
+    
+    // analyzing the audio unit
+    // calculating the unit level as rms of samples
+    level = 0;
+    for(int i=0; i<unitSize; i++)
+    {
+      level += sq(fftSamples[i]);
+    }
+    audioLevels[unit] = sqrt(level);
+    
+    // fourier transform
+    fftLog.forward(fftSamples);
+    
+    // copying the analysis results back into our ftdata array
+    for(int i=0; i<fftLog.avgSize(); i++)
+    {
+      ftdata[unit][i] = fftLog.getBand(i);
+    }
+  }
+  
+  audio.close();
 }
