@@ -34,6 +34,8 @@ float density;
 
 boolean save;
 float seedX, seedY, seedZ;
+float loopOffset;
+Vec3D perlinOffset;
 
 // initial position
 Vec3D pos0, pos;
@@ -41,10 +43,12 @@ Vec3D pos0, pos;
 // arrays for storing audio analysis data
 float[][] ftdata;
 float[] audioLevels;
+float maxLevel, maxft;
 
 // arrays for storing successive brush position
 float[] x,y,z;
 float[] brushSize;
+
 
 void setup() 
 {
@@ -62,6 +66,9 @@ void setup()
   ny = 200;
   nz = 50;
   scale = new Vec3D(0.5, 0.5, 0.5).scaleSelf(50);
+  
+  playCount = 1; // the number of times the audio file loops
+  ny *= playCount;
   
   // intializing the global volumetric space using the parameters above
   volume = new VolumetricSpaceArray(scale, nx, ny, nz);
@@ -85,15 +92,14 @@ void setup()
   seedZ = random(100);
   
   // initial position
-  pos0 = new Vec3D(nx/2, ny/2, nz/2);
+  pos0 = new Vec3D(0, 0, 0);
   pos = new Vec3D();
   
   // setting up minim for audio playback and analysis
   minim = new Minim(this);
   player = minim.loadFile("Back_Garden.wav", 1024); // 1024: buffer size
   player.play();
-  playCount = 3; // the number of times the audio file loops
-  player.loop(playCount);
+  player.loop(playCount - 1);
   
   // creating an FFT object for working with frequency domain representation of the audio file
   // the size of the spectrum is the same as the size of the audio buffer
@@ -101,9 +107,13 @@ void setup()
   
   // calculating averages based on minimum octave width of 22 Hz
   // split each octave into 3 bands
-  fftLog.logAverages(5, 3); // check how this works later !!!
+  //fftLog.logAverages(5, 6); // check how this works later !!!
+  fftLog.linAverages(50);
   
   offlineAnalysis("Back_Garden.wav");
+  
+  // movement vectors
+  perlinOffset = new Vec3D(0,0,0);
 
 }
 
@@ -112,10 +122,32 @@ void draw()
   background(0);
   setLights();
   //println(player.position());
+  //translate(width/2, height/2, 0);
+  //rotateX(frameCount * 0.003);
+  //rotateZ(frameCount * 0.002);
   
   // performing a fft on the audio file loaded in player
   currentBuffer = player.mix;
   fftLog.forward(currentBuffer);
+  
+  //println((playCount - player.loopCount()) * ny/playCount);
+  loopOffset = 0; //(playCount - player.loopCount()) * ny/playCount;
+  println(player.loopCount());
+  // perlin offsets
+  float offX, offY, offZ;
+  //offX = map(noise(seedX, seedY), 0, 1, -20, 20);
+  offY = 0;
+  offZ = 0; //map(noise(seedZ, seedY), 0, 1, 0, 10);
+  offX = 0; //map(noise(seedX, seedY), 0, 1, -5, 5);
+  
+  //getting the level of the current buffer
+  float[] samples = currentBuffer.toArray();
+  float rms = 0;
+  for(int i=0; i<samples.length; i++)
+  {
+      rms += sq(samples[i]);
+  }
+  rms = sqrt(rms);
   
   // iterating over the spectrum elements
   for(int i = 0; i < fftLog.avgSize(); i++)
@@ -124,23 +156,28 @@ void draw()
     pos.x = map(i, 0, fftLog.avgSize(), 0, nx);
     
     // mapping the time stamp of the buffer to y position
-    //pos.y = map(player.position(), 0, player.length(), 0, ny);
-    pos.y = map(frameCount, 0, 1000, 0, ny);
+    pos.y = map(player.position(), 0, player.length(), 0, ny/playCount);
+    
+    //pos.y = map(frameCount, 0, 1000, 0, ny);
     
     // mapping the level of the buffer to z position
-    pos.z = map(currentBuffer.level(), 0, 0.2, nz, 0);
+    pos.z = map(fftLog.getBand(i), 0, maxft, 0, nz);
     //println(currentBuffer.level());
     
     // mapping the amplitude of the frequency band to brush size 
-    float brushSize = map(fftLog.getBand(i), 0, 15, 0.2, 1.5);
+    
+    float brushSize = map(rms, 0, maxLevel, 0.0, 0.8);
+    //float brushSize = map(currentBuffer.level(), 0, maxLevel, 0.0, 2.5);
     //println(fftLog.getBand(i));
     brush.setSize(brushSize);
-    
-    
-    // drawing at the mapped locations
-    brush.drawAtGridPos(pos.x, pos.y, pos.z, density);
-    
-    
+    //println(brushSize, pos.x, pos.y, pos.z);
+
+    //perlinOffset.add(new Vec3D(5 * noise(seedX), 0, 5 * noise(seedZ)));
+    //pos.add(loopOffset);
+    //pos.add(perlinOffset);
+    brush.drawAtGridPos(pos.x + offX, pos.y + loopOffset + offY, pos.z + offZ, density);
+    connectPoints(new Vec3D(pos0.x, pos0.y, pos0.z), new Vec3D(pos.x + offX, pos.y + loopOffset + offY, pos.z + offZ), brushSize);
+    pos0 = new Vec3D(pos.x + offX, pos.y + loopOffset + offY, pos.z + offZ);
     
     //brush.setSize(noise(seedX, seedY, seedZ) + 0.2);
     //brush.drawAtGridPos(map(mouseX, 0, width, 0, nx), map(mouseY, 0, height, 0, ny), map(noise(seedZ), 0, 1, 0, nz), density);
@@ -150,25 +187,28 @@ void draw()
     //pos0 = pos;
   }
   
-  volume.closeSides();
-  surface.reset();
-  surface.computeSurfaceMesh(mesh, iso_threshold);
-  //mesh.toWEMesh().subdivide();
-  setPerspective();
-  gfx.mesh(mesh);
+  //if(player.isPlaying() == false)
+  //{
+    volume.closeSides();
+    surface.reset();
+    surface.computeSurfaceMesh(mesh, iso_threshold);
+    //mesh.toWEMesh().subdivide();
+    setPerspective();
+    gfx.mesh(mesh);
+  //}
   
   if(save)
   {
-    mesh.toWEMesh().subdivide();
-    mesh.toWEMesh().subdivide();
-    mesh.saveAsSTL(sketchPath("renders/mesh" + (System.currentTimeMillis()/1000)+ ".stl"));
-    //mesh.saveAsOBJ(sketchPath("mesh" + (System.currentTimeMillis()/1000)+ ".obj"));
+    //mesh.toWEMesh().subdivide();
+    //mesh.toWEMesh().subdivide();
+    mesh.saveAsSTL(sketchPath("meshes/mesh" + (System.currentTimeMillis()/1000)+ ".stl"));
+    mesh.saveAsOBJ(sketchPath("meshes/mesh" + (System.currentTimeMillis()/1000)+ ".obj"));
     save = false; 
   }
   
-  seedX += 0.01;
-  seedY += 0.01;
-  seedZ += 0.03;
+  seedX += 0.05;
+  seedY += 0.02;
+  seedZ += 0.005;
 }
 
 void keyPressed()
@@ -260,4 +300,35 @@ void offlineAnalysis(String audioFilename)
   }
   
   audio.close();
+  
+  // finding the maximum level
+  maxLevel = max(audioLevels);
+  
+  // finding the maximum Fourier Transform value
+  maxft = ftdata[0][0];
+  for(int i=1; i<totalUnits; i++)
+  {
+     for(int j=0; j<fftLog.avgSize(); j++)
+     {
+       if(ftdata[i][j] > maxft) maxft = ftdata[i][j];
+     }
+  }
+}
+
+void connectPoints(Vec3D p0, Vec3D p1, float brushSize)
+{
+  float t = 0;
+  Vec3D p = new Vec3D();
+  float seed = random(100);
+  
+  while(t < 1)
+  {
+    brush.setSize(brushSize - map(t, 0, 1, 0, 0.6 * brushSize));
+    p.x = ((1-t) * p0.x) + (t * p1.x) + map(noise(seed), 0, 1, -2, 2);
+    p.y = ((1-t) * p0.y) + (t * p1.y) + map(noise(seed), 0, 1, -2, 2);
+    p.z = ((1-t) * p0.z) + (t * p1.z);
+    brush.drawAtGridPos(p.x, p.y, p.z, density);
+    t += 0.05;
+    seed += 0.5;
+  }
 }
